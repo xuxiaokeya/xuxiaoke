@@ -21,34 +21,45 @@ jobs:
 
       - name: Patch Logic
         run: |
-          # 1. 物理路径预设
+          # 1. 定义物理路径
           OLD_DIR="TMessagesProj/src/main/java/org/telegram/messenger"
           NEW_DIR="TMessagesProj/src/main/java/com/fast/tg/pro"
+          OLD_UI_DIR="TMessagesProj/src/main/java/org/telegram/ui"
+          NEW_UI_DIR="TMessagesProj/src/main/java/com/fast/tg/pro/ui"
 
-          # 2. API 与包名注入
+          # 2. 注入 API 信息
           sed -i "s/public static int APP_ID = .*/public static int APP_ID = 15270615;/" $OLD_DIR/BuildVars.java
           sed -i "s/public static String APP_HASH = .*/public static String APP_HASH = \"fa9eb4bf996673bd8aaf76fa5b2ca8e1\";/" $OLD_DIR/BuildVars.java
           
-          # 3. 移除 Google 服务 & 全局包名替换
+          # 3. 移除 Gradle 中的 Google 依赖
           sed -i '/com.google.gms.google-services/d' TMessagesProj/build.gradle
           sed -i '/firebase-/d' TMessagesProj/build.gradle
+          
+          # 4. 全局替换包名和应用名称
           find . -type f \( -name "*.gradle" -o -name "*.java" -o -name "*.xml" \) -exec sed -i 's/org.telegram.messenger/com.fast.tg.pro/g' {} +
           find TMessagesProj/src/main/res/ -name "strings.xml" -exec sed -i 's/>Telegram</>FastTG Pro</g' {} +
           
-          # 4. 【核心修复】创建新文件夹并移动文件
+          # 5. 【关键】物理文件夹搬迁
           mkdir -p $NEW_DIR
           mv $OLD_DIR/* $NEW_DIR/
-          # 移动 UI 文件夹 (DataUsageActivity 所在处)
-          mkdir -p TMessagesProj/src/main/java/com/fast/tg/pro/ui
-          mv TMessagesProj/src/main/java/org/telegram/ui/* TMessagesProj/src/main/java/com/fast/tg/pro/ui/ || true
+          mkdir -p $NEW_UI_DIR
+          mv $OLD_UI_DIR/* $NEW_UI_DIR/
 
-          # 5. 注入 32 线程开关
-          sed -i '/public class SharedConfig {/a \    public static boolean useMaxThreads = false;' $NEW_DIR/SharedConfig.java
+          # 6. 【扫雷】切除 Java 层 Firebase 残留
+          find TMessagesProj/src/main/java -name "*.java" -exec sed -i '/import com.google.firebase/d' {} +
+          sed -i '/FirebaseUserActions/,/end(assistAction);/d' $NEW_UI_DIR/LaunchActivity.java
+          sed -i '/FirebaseApp.initializeApp/d' $NEW_DIR/PushListenerController.java
+          sed -i '/FirebaseMessaging.getInstance()/d' $NEW_DIR/PushListenerController.java
           
-          # 6. FileLoader 逻辑修改
-          sed -i 's/MAX_DOWNLOAD_QUEUE = [0-9]*/MAX_DOWNLOAD_QUEUE = SharedConfig.useMaxThreads ? 32 : 4/g' $NEW_DIR/FileLoader.java
+          # 7. 重写 GCM 服务为标准 Service 空壳
+          echo "package com.fast.tg.pro; import android.app.Service; import android.content.Intent; import android.os.IBinder; public class GcmPushListenerService extends Service { @Override public IBinder onBind(Intent intent) { return null; } }" > $NEW_DIR/GcmPushListenerService.java
 
-          # 7. UI 界面注入
+          # 8. 注入 32 线程逻辑
+          sed -i '/public class SharedConfig {/a \    public static boolean useMaxThreads = false;' $NEW_DIR/SharedConfig.java
+          sed -i 's/MAX_DOWNLOAD_QUEUE = [0-9]*/MAX_DOWNLOAD_QUEUE = SharedConfig.useMaxThreads ? 32 : 4/g' $NEW_DIR/FileLoader.java
+          sed -i 's/MAX_UPLOAD_QUEUE = [0-9]*/MAX_UPLOAD_QUEUE = SharedConfig.useMaxThreads ? 32 : 4/g' $NEW_DIR/FileLoader.java
+
+          # 9. UI 界面开关注入
           sed -i '/listView.setAdapter(listAdapter);/i \
           TextCheckCell threadsCell = new TextCheckCell(getParentActivity()); \
           threadsCell.setTextAndCheck("开启 32 线程极速模式", SharedConfig.useMaxThreads, true); \
@@ -57,7 +68,7 @@ jobs:
               threadsCell.setChecked(SharedConfig.useMaxThreads); \
               SharedConfig.saveConfig(); \
           }); \
-          linearLayout.addView(threadsCell, 0, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT));' $NEW_DIR/ui/DataUsageActivity.java
+          linearLayout.addView(threadsCell, 0, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT));' $NEW_UI_DIR/DataUsageActivity.java
 
       - name: Build Debug APK
         run: ./gradlew assembleDebug
