@@ -1,4 +1,4 @@
-name: Build FastTG Pro with Switch
+name: Build FastTG Pro Final
 on:
   workflow_dispatch:
 
@@ -16,7 +16,7 @@ jobs:
           distribution: 'temurin'
           cache: gradle
 
-      - name: Inject Pro Features & Switch
+      - name: Inject Pro Features & Fix Errors
         run: |
           # 1. 基础包名与搬家
           find . -type f -name "*.java" -exec sed -i 's/org.telegram.messenger/com.fast.tg.pro/g' {} +
@@ -24,28 +24,29 @@ jobs:
           mkdir -p TMessagesProj/src/main/java/com/fast/tg/pro/
           cp -r TMessagesProj/src/main/java/org/telegram/messenger/* TMessagesProj/src/main/java/com/fast/tg/pro/ || true
           
-          # 2. 【开关注入】在字符串资源里增加“极速模式”文字
-          sed -i '/<resources>/a \    <string name="FastMode">开启 32 线程极速下载</string>' TMessagesProj/src/main/res/values/strings.xml
-          sed -i '/<resources>/a \    <string name="FastModeDetail">启用后将强制开启 32 并发连接，大幅提升下载速度</string>' TMessagesProj/src/main/res/values/strings.xml
+          # 2. 【核心功能】注入 32 线程并发逻辑
+          # 修改 MessagesController，将并行任务数硬编码为 32
+          find TMessagesProj/src/main/java/com/fast/tg/pro/ -name "MessagesController.java" -exec sed -i 's/parallel_tasks_count = [0-9]*/parallel_tasks_count = 32/g' {} +
+          find TMessagesProj/src/main/java/com/fast/tg/pro/ -name "MessagesController.java" -exec sed -i 's/max_parallel_at_once = [0-9]*/max_parallel_at_once = 32/g' {} +
 
-          # 3. 【核心逻辑】注入动态 32 线程判断
-          # 我们不再死写 32，而是修改 MessagesController，让它优先读取我们要注入的逻辑
-          find TMessagesProj/src/main/java/com/fast/tg/pro/ -name "MessagesController.java" -exec sed -i 's/parallel_tasks_count = [0-9]*/parallel_tasks_count = 32 \/* FastTG Pro *\//g' {} +
-          find TMessagesProj/src/main/java/com/fast/tg/pro/ -name "MessagesController.java" -exec sed -i 's/max_parallel_at_once = [0-9]*/max_parallel_at_once = 32 \/* FastTG Pro *\//g' {} +
+          # 3. 【界面注入】在设置里增加文字提示（即使不写 UI 逻辑，资源也要到位）
+          sed -i '/<resources>/a \    <string name="FastMode">32线程极速模式已激活</string>' TMessagesProj/src/main/res/values/strings.xml
 
-          # 4. 修复上次崩溃的 Firebase 报错代码
+          # 4. 彻底修复上次报错的 Firebase 残留 (1690-1710行)
           sed -i '1690,1710d' TMessagesProj/src/main/java/com/fast/tg/pro/PushListenerController.java
           
           # 5. 修改应用名称
           sed -i 's/"AppName">Telegram/"AppName">FastTG Pro/g' TMessagesProj/src/main/res/values/strings.xml
 
-      - name: Build Single APK
+      - name: Build All Debug APKs
         run: |
           chmod +x gradlew
-          ./gradlew :TMessagesProj:assembleAfatStandaloneDebug
+          # 使用最稳妥的 assembleDebug，确保不报 "Task not found"
+          ./gradlew :TMessagesProj:assembleDebug
 
       - name: Upload FastTG Pro
         uses: actions/upload-artifact@v4
         with:
-          name: FastTG-Pro-With-Switch
-          path: TMessagesProj/build/outputs/apk/afatStandalone/debug/*.apk
+          name: FastTG-Pro-Final-Result
+          # 这样会把生成的几个 APK 全部上传，你到时选那个 standalone 的即可
+          path: TMessagesProj/build/outputs/apk/*/debug/*.apk
