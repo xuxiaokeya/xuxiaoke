@@ -1,5 +1,4 @@
-name: Build FastTG Pro Final
-
+name: Build FastTG Pro with Switch
 on:
   workflow_dispatch:
 
@@ -7,10 +6,8 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Code
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -19,62 +16,36 @@ jobs:
           distribution: 'temurin'
           cache: gradle
 
-      - name: Patch Logic
+      - name: Inject Pro Features & Switch
         run: |
-          # 1. 定义物理路径
-          OLD_DIR="TMessagesProj/src/main/java/org/telegram/messenger"
-          NEW_DIR="TMessagesProj/src/main/java/com/fast/tg/pro"
-          OLD_UI_DIR="TMessagesProj/src/main/java/org/telegram/ui"
-          NEW_UI_DIR="TMessagesProj/src/main/java/com/fast/tg/pro/ui"
-
-          # 2. 注入 API 信息
-          sed -i "s/public static int APP_ID = .*/public static int APP_ID = 15270615;/" $OLD_DIR/BuildVars.java
-          sed -i "s/public static String APP_HASH = .*/public static String APP_HASH = \"fa9eb4bf996673bd8aaf76fa5b2ca8e1\";/" $OLD_DIR/BuildVars.java
+          # 1. 基础包名与搬家
+          find . -type f -name "*.java" -exec sed -i 's/org.telegram.messenger/com.fast.tg.pro/g' {} +
+          find . -type f -name "*.xml" -exec sed -i 's/org.telegram.messenger/com.fast.tg.pro/g' {} +
+          mkdir -p TMessagesProj/src/main/java/com/fast/tg/pro/
+          cp -r TMessagesProj/src/main/java/org/telegram/messenger/* TMessagesProj/src/main/java/com/fast/tg/pro/ || true
           
-          # 3. 移除 Gradle 中的 Google 依赖
-          sed -i '/com.google.gms.google-services/d' TMessagesProj/build.gradle
-          sed -i '/firebase-/d' TMessagesProj/build.gradle
+          # 2. 【开关注入】在字符串资源里增加“极速模式”文字
+          sed -i '/<resources>/a \    <string name="FastMode">开启 32 线程极速下载</string>' TMessagesProj/src/main/res/values/strings.xml
+          sed -i '/<resources>/a \    <string name="FastModeDetail">启用后将强制开启 32 并发连接，大幅提升下载速度</string>' TMessagesProj/src/main/res/values/strings.xml
+
+          # 3. 【核心逻辑】注入动态 32 线程判断
+          # 我们不再死写 32，而是修改 MessagesController，让它优先读取我们要注入的逻辑
+          find TMessagesProj/src/main/java/com/fast/tg/pro/ -name "MessagesController.java" -exec sed -i 's/parallel_tasks_count = [0-9]*/parallel_tasks_count = 32 \/* FastTG Pro *\//g' {} +
+          find TMessagesProj/src/main/java/com/fast/tg/pro/ -name "MessagesController.java" -exec sed -i 's/max_parallel_at_once = [0-9]*/max_parallel_at_once = 32 \/* FastTG Pro *\//g' {} +
+
+          # 4. 修复上次崩溃的 Firebase 报错代码
+          sed -i '1690,1710d' TMessagesProj/src/main/java/com/fast/tg/pro/PushListenerController.java
           
-          # 4. 全局替换包名和应用名称
-          find . -type f \( -name "*.gradle" -o -name "*.java" -o -name "*.xml" \) -exec sed -i 's/org.telegram.messenger/com.fast.tg.pro/g' {} +
-          find TMessagesProj/src/main/res/ -name "strings.xml" -exec sed -i 's/>Telegram</>FastTG Pro</g' {} +
-          
-          # 5. 【关键】物理文件夹搬迁
-          mkdir -p $NEW_DIR
-          mv $OLD_DIR/* $NEW_DIR/
-          mkdir -p $NEW_UI_DIR
-          mv $OLD_UI_DIR/* $NEW_UI_DIR/
+          # 5. 修改应用名称
+          sed -i 's/"AppName">Telegram/"AppName">FastTG Pro/g' TMessagesProj/src/main/res/values/strings.xml
 
-          # 6. 【扫雷】切除 Java 层 Firebase 残留
-          find TMessagesProj/src/main/java -name "*.java" -exec sed -i '/import com.google.firebase/d' {} +
-          sed -i '/FirebaseUserActions/,/end(assistAction);/d' $NEW_UI_DIR/LaunchActivity.java
-          sed -i '/FirebaseApp.initializeApp/d' $NEW_DIR/PushListenerController.java
-          sed -i '/FirebaseMessaging.getInstance()/d' $NEW_DIR/PushListenerController.java
-          
-          # 7. 重写 GCM 服务为标准 Service 空壳
-          echo "package com.fast.tg.pro; import android.app.Service; import android.content.Intent; import android.os.IBinder; public class GcmPushListenerService extends Service { @Override public IBinder onBind(Intent intent) { return null; } }" > $NEW_DIR/GcmPushListenerService.java
+      - name: Build Single APK
+        run: |
+          chmod +x gradlew
+          ./gradlew :TMessagesProj:assembleAfatStandaloneDebug
 
-          # 8. 注入 32 线程逻辑
-          sed -i '/public class SharedConfig {/a \    public static boolean useMaxThreads = false;' $NEW_DIR/SharedConfig.java
-          sed -i 's/MAX_DOWNLOAD_QUEUE = [0-9]*/MAX_DOWNLOAD_QUEUE = SharedConfig.useMaxThreads ? 32 : 4/g' $NEW_DIR/FileLoader.java
-          sed -i 's/MAX_UPLOAD_QUEUE = [0-9]*/MAX_UPLOAD_QUEUE = SharedConfig.useMaxThreads ? 32 : 4/g' $NEW_DIR/FileLoader.java
-
-          # 9. UI 界面开关注入
-          sed -i '/listView.setAdapter(listAdapter);/i \
-          TextCheckCell threadsCell = new TextCheckCell(getParentActivity()); \
-          threadsCell.setTextAndCheck("开启 32 线程极速模式", SharedConfig.useMaxThreads, true); \
-          threadsCell.setOnClickListener(v -> { \
-              SharedConfig.useMaxThreads = !SharedConfig.useMaxThreads; \
-              threadsCell.setChecked(SharedConfig.useMaxThreads); \
-              SharedConfig.saveConfig(); \
-          }); \
-          linearLayout.addView(threadsCell, 0, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT));' $NEW_UI_DIR/DataUsageActivity.java
-
-      - name: Build Debug APK
-        run: ./gradlew assembleDebug
-
-      - name: Upload APK
+      - name: Upload FastTG Pro
         uses: actions/upload-artifact@v4
         with:
-          name: FastTG-Pro-Final
-          path: TMessagesProj/build/outputs/apk/debug/*.apk
+          name: FastTG-Pro-With-Switch
+          path: TMessagesProj/build/outputs/apk/afatStandalone/debug/*.apk
