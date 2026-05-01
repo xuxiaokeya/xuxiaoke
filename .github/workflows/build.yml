@@ -21,30 +21,34 @@ jobs:
 
       - name: Patch Logic
         run: |
-          # 1. API 注入
-          sed -i "s/public static int APP_ID = .*/public static int APP_ID = 15270615;/" TMessagesProj/src/main/java/org/telegram/messenger/BuildVars.java
-          sed -i "s/public static String APP_HASH = .*/public static String APP_HASH = \"fa9eb4bf996673bd8aaf76fa5b2ca8e1\";/" TMessagesProj/src/main/java/org/telegram/messenger/BuildVars.java
+          # 1. 物理路径预设
+          OLD_DIR="TMessagesProj/src/main/java/org/telegram/messenger"
+          NEW_DIR="TMessagesProj/src/main/java/com/fast/tg/pro"
+
+          # 2. API 与包名注入
+          sed -i "s/public static int APP_ID = .*/public static int APP_ID = 15270615;/" $OLD_DIR/BuildVars.java
+          sed -i "s/public static String APP_HASH = .*/public static String APP_HASH = \"fa9eb4bf996673bd8aaf76fa5b2ca8e1\";/" $OLD_DIR/BuildVars.java
           
-          # 2. 包名替换
-          find . -type f \( -name "*.gradle" -o -name "*.java" -o -name "*.xml" \) -exec sed -i 's/org.telegram.messenger/com.fast.tg.pro/g' {} +
-          
-          # 3. 移除 Google 服务（解决上次报错的关键）
+          # 3. 移除 Google 服务 & 全局包名替换
           sed -i '/com.google.gms.google-services/d' TMessagesProj/build.gradle
           sed -i '/firebase-/d' TMessagesProj/build.gradle
-          
-          # 4. 名字替换
+          find . -type f \( -name "*.gradle" -o -name "*.java" -o -name "*.xml" \) -exec sed -i 's/org.telegram.messenger/com.fast.tg.pro/g' {} +
           find TMessagesProj/src/main/res/ -name "strings.xml" -exec sed -i 's/>Telegram</>FastTG Pro</g' {} +
           
-          # 5. 32线逻辑 (SharedConfig)
-          sed -i '/public class SharedConfig {/a \    public static boolean useMaxThreads = false;' TMessagesProj/src/main/java/org/telegram/messenger/SharedConfig.java
-          sed -i '/editor.putBoolean("saveReactions", saveReactions);/a \            editor.putBoolean("useMaxThreads", useMaxThreads);' TMessagesProj/src/main/java/org/telegram/messenger/SharedConfig.java
-          sed -i '/saveReactions = preferences.getBoolean("saveReactions", true);/a \            useMaxThreads = preferences.getBoolean("useMaxThreads", false);' TMessagesProj/src/main/java/org/telegram/messenger/SharedConfig.java
-          
-          # 6. FileLoader 32线
-          sed -i 's/MAX_DOWNLOAD_QUEUE = [0-9]*/MAX_DOWNLOAD_QUEUE = SharedConfig.useMaxThreads ? 32 : 4/g' TMessagesProj/src/main/java/org/telegram/messenger/FileLoader.java
-          sed -i 's/MAX_UPLOAD_QUEUE = [0-9]*/MAX_UPLOAD_QUEUE = SharedConfig.useMaxThreads ? 32 : 4/g' TMessagesProj/src/main/java/org/telegram/messenger/FileLoader.java
+          # 4. 【核心修复】创建新文件夹并移动文件
+          mkdir -p $NEW_DIR
+          mv $OLD_DIR/* $NEW_DIR/
+          # 移动 UI 文件夹 (DataUsageActivity 所在处)
+          mkdir -p TMessagesProj/src/main/java/com/fast/tg/pro/ui
+          mv TMessagesProj/src/main/java/org/telegram/ui/* TMessagesProj/src/main/java/com/fast/tg/pro/ui/ || true
 
-          # 7. UI 开关注入
+          # 5. 注入 32 线程开关
+          sed -i '/public class SharedConfig {/a \    public static boolean useMaxThreads = false;' $NEW_DIR/SharedConfig.java
+          
+          # 6. FileLoader 逻辑修改
+          sed -i 's/MAX_DOWNLOAD_QUEUE = [0-9]*/MAX_DOWNLOAD_QUEUE = SharedConfig.useMaxThreads ? 32 : 4/g' $NEW_DIR/FileLoader.java
+
+          # 7. UI 界面注入
           sed -i '/listView.setAdapter(listAdapter);/i \
           TextCheckCell threadsCell = new TextCheckCell(getParentActivity()); \
           threadsCell.setTextAndCheck("开启 32 线程极速模式", SharedConfig.useMaxThreads, true); \
@@ -53,7 +57,7 @@ jobs:
               threadsCell.setChecked(SharedConfig.useMaxThreads); \
               SharedConfig.saveConfig(); \
           }); \
-          linearLayout.addView(threadsCell, 0, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT));' TMessagesProj/src/main/java/org/telegram/ui/DataUsageActivity.java
+          linearLayout.addView(threadsCell, 0, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT));' $NEW_DIR/ui/DataUsageActivity.java
 
       - name: Build Debug APK
         run: ./gradlew assembleDebug
