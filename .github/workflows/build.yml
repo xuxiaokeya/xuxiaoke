@@ -1,4 +1,4 @@
-name: Build FastTG Final Edition
+name: Build FastTG Pro Final
 
 on:
   workflow_dispatch:
@@ -19,32 +19,32 @@ jobs:
           distribution: 'temurin'
           cache: gradle
 
-      - name: Inject API and 32x Persistent Logic
+      - name: Patch Logic
         run: |
-          # 1. 注入你提供的 API ID 和 HASH
+          # 1. API 注入
           sed -i "s/public static int APP_ID = .*/public static int APP_ID = 15270615;/" TMessagesProj/src/main/java/org/telegram/messenger/BuildVars.java
           sed -i "s/public static String APP_HASH = .*/public static String APP_HASH = \"fa9eb4bf996673bd8aaf76fa5b2ca8e1\";/" TMessagesProj/src/main/java/org/telegram/messenger/BuildVars.java
           
-          # 2. 全局修改包名 (确保多开共存)
+          # 2. 包名替换
           find . -type f \( -name "*.gradle" -o -name "*.java" -o -name "*.xml" \) -exec sed -i 's/org.telegram.messenger/com.fast.tg.pro/g' {} +
           
-          # 3. 修改 App 名称
-          sed -i 's/<string name="AppName">Telegram<\/string>/<string name="AppName">FastTG Pro<\/string>/g' TMessagesProj/src/main/res/values/strings.xml
+          # 3. 移除 Google 服务（解决上次报错的关键）
+          sed -i '/com.google.gms.google-services/d' TMessagesProj/build.gradle
+          sed -i '/firebase-/d' TMessagesProj/build.gradle
           
-          # 4. 在 SharedConfig.java 中注入持久化开关逻辑
-          # 插入变量定义
+          # 4. 名字替换
+          find TMessagesProj/src/main/res/ -name "strings.xml" -exec sed -i 's/>Telegram</>FastTG Pro</g' {} +
+          
+          # 5. 32线逻辑 (SharedConfig)
           sed -i '/public class SharedConfig {/a \    public static boolean useMaxThreads = false;' TMessagesProj/src/main/java/org/telegram/messenger/SharedConfig.java
-          # 插入保存逻辑：在 saveConfig 方法中自动保存此变量
           sed -i '/editor.putBoolean("saveReactions", saveReactions);/a \            editor.putBoolean("useMaxThreads", useMaxThreads);' TMessagesProj/src/main/java/org/telegram/messenger/SharedConfig.java
-          # 插入读取逻辑：在 loadConfig 方法中自动读取
           sed -i '/saveReactions = preferences.getBoolean("saveReactions", true);/a \            useMaxThreads = preferences.getBoolean("useMaxThreads", false);' TMessagesProj/src/main/java/org/telegram/messenger/SharedConfig.java
-
-          # 5. 修改 FileLoader.java 链接 32 线开关
+          
+          # 6. FileLoader 32线
           sed -i 's/MAX_DOWNLOAD_QUEUE = [0-9]*/MAX_DOWNLOAD_QUEUE = SharedConfig.useMaxThreads ? 32 : 4/g' TMessagesProj/src/main/java/org/telegram/messenger/FileLoader.java
           sed -i 's/MAX_UPLOAD_QUEUE = [0-9]*/MAX_UPLOAD_QUEUE = SharedConfig.useMaxThreads ? 32 : 4/g' TMessagesProj/src/main/java/org/telegram/messenger/FileLoader.java
 
-          # 6. 注入 UI 开关到“数据和存储”页面
-          # 我们在 listView 适配器设置前插入自定义 CheckCell
+          # 7. UI 开关注入
           sed -i '/listView.setAdapter(listAdapter);/i \
           TextCheckCell threadsCell = new TextCheckCell(getParentActivity()); \
           threadsCell.setTextAndCheck("开启 32 线程极速模式", SharedConfig.useMaxThreads, true); \
@@ -58,8 +58,8 @@ jobs:
       - name: Build Debug APK
         run: ./gradlew assembleDebug
 
-      - name: Upload Artifact
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: FastTG-Pro-32x
+          name: FastTG-Pro-Final
           path: TMessagesProj/build/outputs/apk/debug/*.apk
